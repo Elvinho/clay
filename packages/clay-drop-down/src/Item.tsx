@@ -8,7 +8,7 @@ import ClayLink from '@clayui/link';
 import classNames from 'classnames';
 import React from 'react';
 
-interface IProps
+export interface IProps
 	extends React.HTMLAttributes<
 		HTMLSpanElement | HTMLButtonElement | HTMLAnchorElement
 	> {
@@ -55,6 +55,7 @@ const ClayDropDownItem = React.forwardRef<HTMLLIElement, IProps>(
 			href,
 			innerRef,
 			onClick,
+			role = 'none',
 			spritemap,
 			symbolLeft,
 			symbolRight,
@@ -67,7 +68,7 @@ const ClayDropDownItem = React.forwardRef<HTMLLIElement, IProps>(
 		const ItemElement = href ? ClayLink : clickableElement;
 
 		return (
-			<li aria-selected={active} ref={ref}>
+			<li aria-selected={active} ref={ref} role={role}>
 				<ItemElement
 					{...otherProps}
 					className={classNames('dropdown-item', className, {
@@ -78,6 +79,7 @@ const ClayDropDownItem = React.forwardRef<HTMLLIElement, IProps>(
 					href={href}
 					onClick={onClick}
 					ref={innerRef}
+					role="menuitem"
 					tabIndex={disabled ? -1 : tabIndex}
 				>
 					{symbolLeft && (

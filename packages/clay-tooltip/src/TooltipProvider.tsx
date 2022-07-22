@@ -10,7 +10,7 @@ import {
 	delegate,
 	doAlign,
 } from '@clayui/shared';
-import React, {useCallback} from 'react';
+import React, {useCallback, useEffect, useReducer, useRef} from 'react';
 import warning from 'warning';
 
 import ClayTooltip from './Tooltip';
@@ -46,6 +46,12 @@ const ALIGNMENTS_INVERSE_MAP = {
 	tcbc: 'bottom',
 	tlbl: 'bottom-left',
 	trbr: 'bottom-right',
+} as const;
+
+const ALIGNMENTS_FORCE_MAP = {
+	...ALIGNMENTS_INVERSE_MAP,
+	bctc: 'top-left',
+	tcbc: 'bottom-left',
 } as const;
 
 interface IState {
@@ -116,10 +122,10 @@ function matches(
 }
 
 function closestAncestor(node: HTMLElement, s: string) {
-	const el = node;
+	const element = node;
 	let ancestor: HTMLElement | null = node;
 
-	if (!document.documentElement.contains(el)) {
+	if (!document.documentElement.contains(element)) {
 		return null;
 	}
 
@@ -177,26 +183,24 @@ interface IPropsWithScope extends IPropsBase {
 	scope: string;
 }
 
-const TooltipProvider: React.FunctionComponent<
-	IPropsWithChildren | IPropsWithScope
-> = ({
+const TooltipProvider = ({
 	autoAlign = true,
 	children,
 	containerProps = {},
 	contentRenderer = (props) => props.title,
 	delay = 600,
 	scope,
-}) => {
-	const [{align, message = '', setAsHTML, show}, dispatch] = React.useReducer(
+}: IPropsWithChildren | IPropsWithScope) => {
+	const [{align, message = '', setAsHTML, show}, dispatch] = useReducer(
 		reducer,
 		initialState
 	);
 
 	// Using `any` type since TS incorrectly infers setTimeout to be from NodeJS
-	const timeoutIdRef = React.useRef<any>();
-	const targetRef = React.useRef<HTMLElement | null>(null);
-	const titleNodeRef = React.useRef<HTMLElement | null>(null);
-	const tooltipRef = React.useRef<HTMLElement | null>(null);
+	const timeoutIdRef = useRef<any>();
+	const targetRef = useRef<HTMLElement | null>(null);
+	const titleNodeRef = useRef<HTMLElement | null>(null);
+	const tooltipRef = useRef<HTMLElement | null>(null);
 
 	const saveTitle = useCallback((element: HTMLElement) => {
 		titleNodeRef.current = element;
@@ -241,7 +245,15 @@ const TooltipProvider: React.FunctionComponent<
 		}
 	}, []);
 
-	const handleHide = useCallback(() => {
+	const handleHide = useCallback((event?: any) => {
+		if (
+			event &&
+			(tooltipRef.current?.contains(event.relatedTarget) ||
+				targetRef.current?.contains(event.relatedTarget))
+		) {
+			return;
+		}
+
 		dispatch({type: 'hide'});
 
 		clearTimeout(timeoutIdRef.current);
@@ -256,8 +268,6 @@ const TooltipProvider: React.FunctionComponent<
 	}, []);
 
 	const handleShow = useCallback(({target}: {target: HTMLElement}) => {
-		targetRef.current = target;
-
 		const hasTitle =
 			target &&
 			(target.hasAttribute('title') || target.hasAttribute('data-title'));
@@ -267,6 +277,8 @@ const TooltipProvider: React.FunctionComponent<
 			: closestAncestor(target, '[title], [data-title]');
 
 		if (titleNode) {
+			targetRef.current = target;
+
 			target.addEventListener('click', handleHide);
 
 			const title =
@@ -284,6 +296,8 @@ const TooltipProvider: React.FunctionComponent<
 				'data-title-set-as-html'
 			);
 
+			clearTimeout(timeoutIdRef.current);
+
 			timeoutIdRef.current = setTimeout(
 				() => {
 					dispatch({
@@ -298,7 +312,7 @@ const TooltipProvider: React.FunctionComponent<
 		}
 	}, []);
 
-	React.useEffect(() => {
+	useEffect(() => {
 		const handleEsc = (event: KeyboardEvent) => {
 			if (show && event.key === Keys.Esc) {
 				event.stopImmediatePropagation();
@@ -312,13 +326,18 @@ const TooltipProvider: React.FunctionComponent<
 		return () => document.removeEventListener('keyup', handleEsc, true);
 	}, [show]);
 
-	React.useEffect(() => {
+	useEffect(() => {
 		if (scope) {
 			const disposeShowEvents = TRIGGER_SHOW_EVENTS.map((eventName) => {
 				return delegate(document.body, eventName, scope, handleShow);
 			});
 			const disposeHideEvents = TRIGGER_HIDE_EVENTS.map((eventName) => {
-				return delegate(document.body, eventName, scope, handleHide);
+				return delegate(
+					document.body,
+					eventName,
+					`${scope}, .tooltip`,
+					handleHide
+				);
 			});
 
 			return () => {
@@ -328,14 +347,14 @@ const TooltipProvider: React.FunctionComponent<
 		}
 	}, []);
 
-	React.useEffect(() => {
+	useEffect(() => {
 		if (
 			titleNodeRef.current &&
 			(tooltipRef as React.RefObject<HTMLDivElement>).current
 		) {
 			const points = ALIGNMENTS_MAP[align || 'top'] as [string, string];
 
-			const newAlignmentString = doAlign({
+			const alignment = doAlign({
 				overflow: {
 					adjustX: autoAlign,
 					adjustY: autoAlign,
@@ -344,13 +363,22 @@ const TooltipProvider: React.FunctionComponent<
 				sourceElement: (tooltipRef as React.RefObject<HTMLDivElement>)
 					.current!,
 				targetElement: titleNodeRef.current,
-			}).points.join('') as keyof typeof ALIGNMENTS_INVERSE_MAP;
+			});
+
+			const alignmentString = alignment.points.join(
+				''
+			) as keyof typeof ALIGNMENTS_INVERSE_MAP;
 
 			const pointsString = points.join('');
 
-			if (pointsString !== newAlignmentString) {
+			if (alignment.overflow.adjustX) {
 				dispatch({
-					align: ALIGNMENTS_INVERSE_MAP[newAlignmentString],
+					align: ALIGNMENTS_FORCE_MAP[alignmentString],
+					type: 'align',
+				});
+			} else if (pointsString !== alignmentString) {
+				dispatch({
+					align: ALIGNMENTS_INVERSE_MAP[alignmentString],
 					type: 'align',
 				});
 			}
@@ -358,12 +386,13 @@ const TooltipProvider: React.FunctionComponent<
 	}, [align, show]);
 
 	warning(
-		!children && !scope,
+		(typeof children === 'undefined' && typeof scope !== 'undefined') ||
+			(typeof scope === 'undefined' && typeof children !== 'undefined'),
 		'<TooltipProvider />: You must use at least one of the following props: `children` or `scope`.'
 	);
 
 	warning(
-		children && scope,
+		typeof children !== 'undefined' || typeof scope !== 'undefined',
 		'<TooltipProvider />: If you want to use `scope`, use <TooltipProvider /> as a singleton and do not pass `children`.'
 	);
 
@@ -377,32 +406,43 @@ const TooltipProvider: React.FunctionComponent<
 		title: message,
 	});
 
+	const tooltip = show && (
+		<ClayPortal {...containerProps}>
+			<ClayTooltip alignPosition={align} ref={tooltipRef} show>
+				{setAsHTML && typeof titleContent === 'string' ? (
+					<span
+						dangerouslySetInnerHTML={{
+							__html: titleContent,
+						}}
+					/>
+				) : (
+					titleContent
+				)}
+			</ClayTooltip>
+		</ClayPortal>
+	);
+
 	return (
 		<>
-			{show && (
-				<ClayPortal {...containerProps}>
-					<ClayTooltip alignPosition={align} ref={tooltipRef} show>
-						{setAsHTML && typeof titleContent === 'string' ? (
-							<span
-								dangerouslySetInnerHTML={{
-									__html: titleContent,
-								}}
-							/>
-						) : (
-							titleContent
-						)}
-					</ClayTooltip>
-				</ClayPortal>
+			{scope ? (
+				<>
+					{tooltip}
+					{children}
+				</>
+			) : (
+				children &&
+				React.cloneElement(children, {
+					...children.props,
+					children: (
+						<>
+							{children.props.children}
+							{tooltip}
+						</>
+					),
+					onMouseOut: handleHide,
+					onMouseOver: handleShow,
+				})
 			)}
-
-			{scope
-				? children
-				: children &&
-				  React.cloneElement(children, {
-						...children.props,
-						onMouseOut: handleHide,
-						onMouseOver: handleShow,
-				  })}
 		</>
 	);
 };
